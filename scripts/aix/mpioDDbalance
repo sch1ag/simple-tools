@@ -1,0 +1,245 @@
+# Version 4
+
+eval 'exec /usr/bin/perl -w -S $0 ${1+"$@"}'
+        if 0;
+
+use strict;
+use warnings;
+use Getopt::Std;
+use Data::Dumper;
+
+$ENV{'LANG'} = 'C';
+
+our ($opt_v, $opt_d, $opt_t, $opt_h);
+getopts('vdth');
+if ($opt_h) { usage() };
+my $dryrun = $opt_d;
+my $verbose = $opt_v;
+my $showtable = $opt_t;
+
+my $action = shift;
+
+if ($action && $action eq "start")
+{
+    my $dd_devs_to_paths = get_dpaths();
+    my $groups = mk_groups($dd_devs_to_paths);
+    #print Dumper($groups);
+    define_target_state($groups);
+    set_tgt_state($groups);
+}
+
+sub set_tgt_state
+{
+    my $grps = shift;
+    my %cmd_pstate = ('enable' => [], 'disable' => []);
+
+    for my $grp (@{$grps})
+    {
+        for my $dddev (keys %{$grp->{'devs'}})
+        {
+            for my $p_id (keys %{$grp->{'devs'}->{$dddev}})
+            {
+                $showtable && printf("%10s %5d %-8s %17s %-17s %8s %4d\n",
+                           $dddev,
+                           $p_id,
+                           $grp->{'devs'}->{$dddev}->{$p_id}->{'ctlr'},
+                           $grp->{'devs'}->{$dddev}->{$p_id}->{'t_port'},
+                           $grp->{'devs'}->{$dddev}->{$p_id}->{'lun'},
+                           $grp->{'devs'}->{$dddev}->{$p_id}->{'status'},
+                           $grp->{'devs'}->{$dddev}->{$p_id}->{'target_status'});
+
+                if ($grp->{'devs'}->{$dddev}->{$p_id}->{'target_status'})
+                {
+                    if ($grp->{'devs'}->{$dddev}->{$p_id}->{'status'} ne 'Enabled')
+                    {
+                        push @{$cmd_pstate{'enable'}}, {'dddev' => $dddev, 'pid' => $p_id};
+                    }
+                }
+                else
+                {
+                    if ($grp->{'devs'}->{$dddev}->{$p_id}->{'status'} ne 'Disabled')
+                    {
+                        push @{$cmd_pstate{'disable'}}, {'dddev' => $dddev, 'pid' => $p_id};
+                    }
+                }
+            }
+        }
+    }
+
+    for my $cmdtype ('enable', 'disable')
+    {
+        for my $cmdargs (@{$cmd_pstate{$cmdtype}})
+        {
+            my $cmd = "chpath -s $cmdtype -l $cmdargs->{'dddev'} -i $cmdargs->{'pid'}";
+            $verbose && print "cmd: $cmd\n";
+            `$cmd` unless ($dryrun);
+        }
+    }
+}
+
+sub define_target_state
+{
+    my $grps = shift;
+    my $counter = 0;
+    my $t_port_cnt = {};
+    for my $grp (@{$grps})
+    {
+        set_target_state_grp($grp, $counter, $t_port_cnt);
+        $counter++;
+    }
+}
+
+sub set_target_state_grp
+{
+    my $grp = shift;
+    my $counter = shift;
+    my $t_port_cnt = shift;
+
+    my $divider = @{$grp->{'ctlrs'}};
+    my @sorted_dddevs = sort keys %{$grp->{'devs'}};
+    for my $dddev (@sorted_dddevs)
+    {
+        my $use_ctlr = $grp->{'ctlrs'}->[$counter++ % $divider];
+        #print "ddmpio $dddev $use_ctlr\n";
+        my %tport_to_pid;
+        for my $p_id (keys %{$grp->{'devs'}->{$dddev}})
+        {
+            if ($grp->{'devs'}->{$dddev}->{$p_id}->{'ctlr'} eq $use_ctlr)
+            {
+                $tport_to_pid{$grp->{'devs'}->{$dddev}->{$p_id}->{'t_port'}} = $p_id;
+            }
+        }
+
+        my $b_pid = get_best_path_id(\%tport_to_pid, $t_port_cnt);
+        #print "best path id: $b_pid\n";
+        $grp->{'devs'}->{$dddev}->{$b_pid}->{'target_status'} = 1;
+    }
+}
+
+sub get_best_path_id
+{
+    my $tport_to_pid = shift;
+    my $t_port_cnt = shift;
+
+    my $b_tport;
+    for my $tport (keys %{$tport_to_pid})
+    {
+        $b_tport = $tport unless ($b_tport);
+
+        if (not defined $t_port_cnt->{$tport})
+        {
+            $t_port_cnt->{$tport} = 0;
+            $b_tport = $tport;
+            last;
+        }
+
+        if ($t_port_cnt->{$tport} < $t_port_cnt->{$b_tport})
+        {
+            $b_tport = $tport;
+        }
+    }
+
+    $t_port_cnt->{$b_tport}++;
+    return $tport_to_pid->{$b_tport};
+}
+
+sub get_dpaths
+{
+    my @lines = `lsdev -S a -t MDataDomain -F name`;
+    my @dddevs = grep { chomp $_; $_ if ( $_ ne '' ) } @lines;
+
+    @lines = `lspath -F 'path_status status name path_id parent connection'`;
+
+    my %dev_pathes;
+
+    for my $line (@lines)
+    {
+        #if (my ($pstatus, $status, $dev_name, $path_id, $pctlr, $tport, $lun) = ($line =~ /(\w+)\s+(\w+)\s+(\w+)\s+(\w+)\s+(\w+)\s+(\w+),(\w+)/))
+        if (my ($status, $dev_name, $path_id, $pctlr, $tport, $lun) = ($line =~ /Available\s+(\w+)\s+(\w+)\s+(\w+)\s+(\w+)\s+(\w+),(\w+)/))
+        {
+            if (grep { $_ eq $dev_name} @dddevs)
+            {
+                (defined $dev_pathes{$dev_name}) or $dev_pathes{$dev_name} = {};
+                $dev_pathes{$dev_name}->{$path_id} = {
+                    #'path_status'   => $pstatus,
+                    'status'        => $status,
+                    'ctlr'          => $pctlr,
+                    't_port'        => $tport,
+                    'lun'           => $lun,
+                    'target_status' => 0
+                }
+            }
+        }
+    }
+    return \%dev_pathes;
+}
+
+sub mk_groups
+{
+    my $dev_pathes = shift;
+    my @groups;
+
+    for my $dev_name (keys %{$dev_pathes})
+    {
+        add_to_grp(\@groups, $dev_pathes, $dev_name);
+    }
+    return \@groups;
+}
+
+
+sub add_to_grp
+{
+    my $groups = shift;
+    my $dev_pathes = shift;
+    my $dev_name = shift;
+
+    my %uniq_dev_ctlrs = map { $dev_pathes->{$dev_name}->{$_}->{'ctlr'} => 1 } keys %{$dev_pathes->{$dev_name}};
+    my @cur_ctlr_grp = keys %uniq_dev_ctlrs;
+    #print Dumper(\@cur_ctlr_grp);
+
+    for my $grp (@{$groups})
+    {
+        if (ctlr_grp_eq($grp->{'ctlrs'}, \@cur_ctlr_grp))
+        {
+            $grp->{'devs'}->{$dev_name} = $dev_pathes->{$dev_name};
+            return;
+        }
+    }
+
+    my $newgrp = {
+        'devs'  => { $dev_name => $dev_pathes->{$dev_name} },
+        'ctlrs' => \@cur_ctlr_grp
+    };
+
+    push @{$groups}, $newgrp;
+}
+
+sub ctlr_grp_eq
+{
+    my $a = shift;
+    my $b = shift;
+    my $ret = 0;
+
+    if (@{$a} == @{$b})
+    {
+        my %c = map { $_ => 1 } @{$a};
+        my $m =grep { 1 if defined $c{$_} } @{$b};
+        $ret = 1 if ($m == @{$b});
+    }
+    return $ret;
+}
+
+sub usage {
+print "$0 designed to balance enabled paths to DataDomain MPIO devices thru different controllers of AIX server
+$0 [-t] [-v] [-d] start | -h
+
+        Options:
+        -t : show results table
+        -v : show commands prior to execution
+        -d : execute without actually running commands
+        -h : usage
+";
+exit;
+}
+
+
