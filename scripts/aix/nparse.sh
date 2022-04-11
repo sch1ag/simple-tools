@@ -1,5 +1,5 @@
 #!/bin/bash
-#Version 1.5
+#Version 1.6
 
 echoerr() { echo "$@" 1>&2; }
 
@@ -84,7 +84,7 @@ awk -F',' -v INCLUDESTATS="$INCLUDESTATS" -v PREFIX="${ODIR}/" -v DELIM=$DELIM '
     month["NOV"] = "11"
     month["DEC"] = "12"
 
-    STATSSTR="CPU_ALL MEMNEW NET NETPACKET IOADAPT.tps IOADAPT.KBps_read IOADAPT.KBps_write PAGE PROC.RunSwap PROC.ForkExec PROC.PswScall PROC.SemMsg PROC.ReadWrite FCREAD.KBps FCWRITE.KBps FCXFERIN.tps FCXFEROUT.tps"
+    STATSSTR="CPU_ALL MEM MEMNEW VM NET NETPACKET IOADAPT.tps IOADAPT.KBps_read IOADAPT.KBps_write PAGE PROC.RunSwap PROC.ForkExec PROC.PswScall PROC.SemMsg PROC.ReadWrite FCREAD.KBps FCWRITE.KBps FCXFERIN.tps FCXFEROUT.tps"
     if(INCLUDESTATS!=""){STATSSTR=STATSSTR " " INCLUDESTATS}
     split(STATSSTR, STATS, " ")
     
@@ -93,6 +93,8 @@ awk -F',' -v INCLUDESTATS="$INCLUDESTATS" -v PREFIX="${ODIR}/" -v DELIM=$DELIM '
     
     stat2page["CPU_ALL"]="CPU_ALL"
     stat2page["MEMNEW"]="MEMNEW"
+    stat2page["MEM"]="MEM" #linux
+    stat2page["VM"]="VM" #linux
     stat2page["NET"]="NET"
     stat2page["NETPACKET"]="NETPACKET"
     stat2page["IOADAPT.tps"]="IOADAPT"
@@ -112,6 +114,8 @@ awk -F',' -v INCLUDESTATS="$INCLUDESTATS" -v PREFIX="${ODIR}/" -v DELIM=$DELIM '
     
     stat2coll["CPU_ALL"]="User%|Sys%|Wait%"
     stat2coll["MEMNEW"]="Process%|FScache%|System%|Free%"
+    stat2coll["MEM"]="memtotal|hightotal|lowtotal|swaptotal|memfree|highfree|lowfree|swapfree|memshared|cached|active|bigfree|buffers|swapcached|inactive" #linux
+    stat2coll["VM"]="nr_dirty|nr_writeback|nr_unstable|nr_page_table_pages|nr_mapped|nr_slab|pgpgin|pgpgout|pswpin|pswpout|pgfree|pgactivate|pgdeactivate|pgfault|pgmajfault|pginodesteal|slabs_scanned|kswapd_steal|kswapd_inodesteal|pageoutrun|allocstall|pgrotated|pgalloc_high|pgalloc_normal|pgalloc_dma|pgrefill_high|pgrefill_normal|pgrefill_dma|pgsteal_high|pgsteal_normal|pgsteal_dma|pgscan_kswapd_high|pgscan_kswapd_normal|pgscan_kswapd_dma|pgscan_direct_high|pgscan_direct_normal|pgscan_direct_dma" #linux
     stat2coll["NET"]=NETINT
     stat2coll["NETPACKET"]=NETINT
     stat2coll["IOADAPT.tps"]="fcs[0-9]+.*-tps"
