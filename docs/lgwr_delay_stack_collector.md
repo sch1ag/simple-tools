@@ -1,4 +1,4 @@
-## scripts/rhel/lgwr_delay_stack_collector.pl
+## scripts/linux/lgwr_delay_stack_collector.pl
 
 The script is designed to continuously collect Oracle lgwr stacks into a ring buffer and dump them into a file after registering a write delay in the lgw `.trc` file.
 
